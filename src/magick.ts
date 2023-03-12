@@ -11,7 +11,7 @@ export default async function magick({
   args,
   cmd = 'magick',
   captureStdout = false,
-  verbose = false,
+  verbose = true,
 }: ArgType): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = execFile(cmd, args);

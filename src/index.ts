@@ -36,10 +36,8 @@ program
   .name('zf')
   .version('0.0.1')
   .option('-c, --config [config]', 'path to config file')
-  .option('-f, --foo <foo>', 'foobar')
+  .option('-v, --verbose', 'verbose mode')
   .parse(process.argv);
-
-// console.log(p.opts());
 
 const opts = program.opts();
 
@@ -52,9 +50,10 @@ getConfig(opts).then(async config => {
   console.log(config);
 
   // 2. figure out image dimensions in pixels
-  const dimensions = await getDimensions(config.images);
+  // const dimensions = await getDimensions(config.images[0]);
+  
   // 3. process input images
-  const pages = await processInputImages(config, dimensions, tempDir);
+  const pages = await processInputImages(config, tempDir);
   console.log(pages);
 
   // 4. create new "spreads"
@@ -82,14 +81,15 @@ async function getConfig(opts) {
   }
 }
 
-async function getDimensions(images: Filename[]): Promise<Dimensions> {
+async function getDimensions(image: Filename): Promise<Dimensions> {
   const response = await magick({
-    args: ['identify', '-format', '%wx%h', images[0] ],
+    args: ['identify', '-format', '%wx%h', image ],
     captureStdout: true
   });
-  const [ heightStr, widthStr ] = response.split('x');
+  const [ widthStr, heightStr ] = response.split('x');
   const height = parseInt(heightStr, 10);
   const width = parseInt(widthStr, 10);
+  console.log({response, height, width});
   return { height, width };
 }
 
@@ -98,38 +98,39 @@ async function processImage(
   dimensions: Dimensions,
   pane: Pane,
   outFile: Filename,
-) {
+): Promise<string> {
   const { height, width } = dimensions;
   const cropOffset = pane === 'left' ? 0 : width;
   const cropArgs = `${width}x${height}+${cropOffset}+0`;
   const args = [ imagePath, '-crop', cropArgs, outFile ];
-  magick({ args });
+  return magick({ args });
 }
 
 async function processInputImages(
   config: Config,
-  dimensions: Dimensions,
+  // dimensions: Dimensions,
   tempDir: Filename
 ) {
-  const images = config.backIsFirst ? [...config.images, config.images[0]] : config.images;
+  const { images } = config;
+  const { width, height } = await getDimensions(images[0]);
   const pages: Filename[] = [];
-  // await images.forEach(async (image, idx) => {
   for (let i = 0; i < images.length; i++) {
     const image = images[i];
     // NOTE: we skip the left pane on the first page (unless backIsFirst option is specified, 
     // in which case, it is processes as the final image)
     if (i !== 0) {
       const leftFileName = `${tempDir}/page-${i * 2 - 1}.png`;
-      await processImage(image, dimensions, "left", leftFileName);
+      await processImage(image, { height, width: width / 2 }, "left", leftFileName);
       // TODO: handle errors
       pages.push(leftFileName);
+
     }
 
     // NOTE: as with above, we skip right pane on the last page (again, unless backIsFirst
     // option is specified, in which case the last page will have already been handled above)
     if (i !== images.length - 1) {
       const rightFileName = `${tempDir}/page-${i * 2}.png`;
-      await processImage(image, dimensions, "right", rightFileName);
+      await processImage(image, { height, width: width / 2 }, "right", rightFileName);
       // TODO: handle errors
       pages.push(rightFileName);
     }
@@ -142,7 +143,6 @@ async function createSpread(
   right: Filename,
   outFile: Filename
 ) {
-  const cmd = 'magick';
   const args = [
     'montage',
     '-mode', 'concatenate',
@@ -169,9 +169,8 @@ async function createSpreadsFromPages(
     }
 
     const outFile = `${tempDir}/spread-${i}.png`;
-    if (await createSpread(left, right, outFile)) {
-      spreads.push(outFile);
-    }
+    await createSpread(left, right, outFile)
+    spreads.push(outFile);
   }
   return spreads;
 }
@@ -198,7 +197,7 @@ function calculateLayout(config: Config) {
   const marginY = 2 * (config.paperSize?.margin || 0);
   
   const horizontalSpace = (config.paperSize?.dimensions?.width || 8.5) - marginX;
-  const verticalSpace = (config.paperSize?.dimensions?.height || 8.5) - marginY;
+  const verticalSpace = (config.paperSize?.dimensions?.height || 11) - marginY;
 
   const spreadWidth = 2 * (config.realDimensions.width);
   const spreadHeight = config.realDimensions.height;
@@ -257,19 +256,25 @@ function calculateLayout(config: Config) {
 
 
 async function renderOnePage(layout: Layout, spreads: Filename[], out: Filename) {
-  const { padding, gridLayout: { x, y } } = layout;
+  const { x, y } = layout.gridLayout;
   const tileArgs = `${x}x${y}`;
-  // const spacingArgs = `+${padding}+${padding}`;
   const args = [
     'montage',
-    // TODO: figure out how to preserve colors
-    // '-colorspace', 'sRGB',
     '-mode', 'concatenate',
     '-tile', tileArgs,
-    // '-geometry', spacingArgs,
-    // '-frame', '10x10',
-    // '-matteColor', 'none',
     ...spreads,
+    out,
+  ];
+  console.log(args);
+  return magick({ args });
+}
+
+async function createFiller(out: Filename, dimensions: Dimensions) {
+  // const geomtry = await ()
+  const args = [
+    'convert',
+    '-size', `${dimensions.width}x${dimensions.height}`,
+    'xc:transparent',
     out,
   ];
   return magick({ args });
@@ -283,15 +288,16 @@ async function renderSpreads(layout: Layout, spreads: Filename[]) {
   let front = [];
   let back = [];
 
-
   for (let i = 0; i < spreads.length; i += 2) {
     // adding images to the front is easy; they just go in order
-    // adding images to the back is harder, as we have to place right to left, top to bottom
-    const row = Math.trunc(front.length / x);
-    const column = front.length % x;
-    
+    const frontIdx = front.length;
     front.push(spreads[i]);
+
+    // adding images to the back is harder, as we have to place right to left, top to bottom
+    const row = Math.trunc(frontIdx / x);
+    const column = frontIdx % x;
     const reverseIdx = (row * x) + (x - column - 1);
+    console.log({ row, column, frontIdx, backIdx: reverseIdx});
     back[reverseIdx] = spreads[i+1]
 
     if (front.length === capacity) {
@@ -308,13 +314,17 @@ async function renderSpreads(layout: Layout, spreads: Filename[]) {
   }
 
   if (front.length > 0) {
-    // create filler image for empty space in "back" pic
-    const filler = `${tempDir}/filler-spread.png`;
+    const fillerDimensions = await getDimensions(spreads[0]);
+    const fillerImage = `${tempDir}/filler.png`;
+    await createFiller(fillerImage, fillerDimensions);
+
     for (let i = 0; i < back.length; i++) {
       if (!back[i]) {
-        back[i]  = filler;
+        back[i]  = fillerImage;
       }
     }
+
+    console.log(front, back);
     
     const frontFilename = `${tempDir}/result-${pages.length}-front-${pages.length / 2}.png`;
     await renderOnePage(layout, front, frontFilename);
