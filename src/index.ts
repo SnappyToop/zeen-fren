@@ -82,18 +82,14 @@ async function getConfig(opts) {
   }
 }
 
-async function getDimensions(images: Filename[]) {
-  // TODO: examine files and determine dimensions programatically
-  // const height = 800;
-  // const width = 800;
+async function getDimensions(images: Filename[]): Promise<Dimensions> {
   const response = await magick({
     args: ['identify', '-format', '%wx%h', images[0] ],
     captureStdout: true
   });
-  const [ height, width ] = response.split('x');
-  // console.log(response);
-  // const height = 3300;
-  // const width = 2550; //5100x3300
+  const [ heightStr, widthStr ] = response.split('x');
+  const height = parseInt(heightStr, 10);
+  const width = parseInt(widthStr, 10);
   return { height, width };
 }
 
