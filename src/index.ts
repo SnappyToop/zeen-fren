@@ -146,7 +146,6 @@ function genPosition(base: string[], position: Coordinates, imageDimensions: Dim
   return [
     '(', ...base, ')',
     '-background', 'none',
-    '-gravity', 'southeast',
     '-extent', `${x}x${y}`,
   ];
 }
@@ -240,7 +239,10 @@ async function mergeLayers(pages: string[][]) {
   for (let i=0; i<pages.length; i++) {
     // console.log(pages[i]);
     const args = [
+      // gravity southwest is applied to create the offsets
+      '-gravity', 'southeast',
       ...(pages[i].map(page => ['(', ...page, ')'])).flat(),
+      // gravity northwest is set to merge the players
       '-gravity', 'northwest',
       '-layers', 'mosaic',
       `${tempDir}/page-${i}.png`,
