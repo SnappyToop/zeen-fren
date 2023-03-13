@@ -34,6 +34,8 @@ type Layout = {
   padding: number,
 };
 
+type Command = string[];
+
 program
   .name('zf')
   .version('0.0.1')
@@ -69,7 +71,8 @@ getConfig(opts).then(async config => {
   // console.log(out.map(x => x.flat().join(' ')));
 
   // 6. execute the commands and render into pages
-  const page = await mergeLayers(out);
+  // const page = await mergeLayers(out);
+  const page = await smushPages(out);
   console.log(page)
 
 
@@ -103,7 +106,7 @@ async function processImage(
   const { height, width } = dimensions;
   const offset = pane === 'left' ? 0 : width;
   const region = `${width}x${height}+${offset}+0`;
-  const args = [ imagePath, '-extract', region, '+repage' ];
+  const args = [ imagePath, '-crop', region, '+repage' ];
   return args;
 }
 
@@ -139,17 +142,6 @@ async function processInputImages(
   return pages;
 }
 
-
-function genPosition(base: string[], position: Coordinates, imageDimensions: Dimensions) {
-  const x = imageDimensions.width * (position.x + 1);
-  const y = imageDimensions.height * (position.y + 1);
-  return [
-    '(', ...base, ')',
-    '-background', 'none',
-    '-extent', `${x}x${y}`,
-  ];
-}
-
 async function calculatePositions(pages: string[][], layout: Layout) {
   // while pages remain ... 
   //   assemble pages for front
@@ -168,89 +160,57 @@ async function calculatePositions(pages: string[][], layout: Layout) {
   //   if page is full
   //     create new page
 
-  // const pageGeometry = 
-  // let pages = [];
-
-  // 5100x3300
-  // const imageWidth = 800;
-  // const imageHeight = 800;
-  
-  // const imageDimeniosn = { width: 2550, height: 3300 };
-  const imageDimeniosn = { width: 800, height: 800 };
-
   const numColumns = layout.gridLayout.x;
   const numRows = layout.gridLayout.y;
-  console.log(numColumns, numRows);
+  
   
   let row = 0, column = 0;
+  let front: Command[][] = [[]], back: Command[][] = [[]];
+  const out: Command[][][] = [];
 
-  let front = [], back = [];
   for (let i=0, j=pages.length-1; i < j; i+=2, j-=2) {
-    
-    // front left
-    front.push(
-      genPosition(
-        pages[j], 
-        { x: column * 2, y: row },
-        imageDimeniosn,
-      )
-    );
-
-    // front right
-    front.push(
-      genPosition(
-        pages[i], 
-        { x: (column * 2) + 1, y: row },
-        imageDimeniosn,
-      )
-    );
-    
-    // back right 
-    back.push(
-      genPosition(
-        pages[j-1], 
-        { x: (2 * (numColumns - column) - 1), y: row },
-        imageDimeniosn,
-      )
-    );
-
-    // back left 
-    back.push(
-      genPosition(
-        pages[i+1], 
-        { x: 2 * (numColumns - column - 1), y: row  },
-        imageDimeniosn,
-      )
-    );
+    front[row][column*2] = pages[j]; // front left
+    front[row][column*2+1] = pages[i]; // front right
+    back[row][(2 * (numColumns - column) - 1)] = pages[j-1]; // back right 
+    back[row][ 2 * (numColumns - column - 1)] = pages[i+1]; // back left 
 
     column ++;
     if (column === numColumns) {
       column = 0;
       row++;
+      if (row === numRows) {
+        out.push(front, back);
+        front = [[]];
+        back = [[]];
+      } else {
+        front[row] = [];
+        back[row] = [];
+      }
     }
   }
 
   // TODO: allow for multiple pages!
-  return [front, back];
+  out.push(front, back);
+  return out;
 }
 
-
-async function mergeLayers(pages: string[][]) {
+async function smushPages(pages: Command[][]) {
   for (let i=0; i<pages.length; i++) {
-    // console.log(pages[i]);
     const args = [
-      // gravity southwest is applied to create the offsets
-      '-gravity', 'southeast',
-      ...(pages[i].map(page => ['(', ...page, ')'])).flat(),
-      // gravity northwest is set to merge the players
-      '-gravity', 'northwest',
-      '-layers', 'mosaic',
+      '-background', 'none',
+      ...(pages[i].flatMap(row => [
+        '(',
+        ...row.flatMap(cmd => ['(', ...cmd, ')']),
+        '+append',
+        ')'
+      ])),
+      '-gravity', i % 2 === 0 ? 'west': 'east',
+      '-append',
       `${tempDir}/page-${i}.png`,
     ];
-
     console.log(args);
     console.log(await magick({ args }));
-  }  
+  }
 }
 
 function _calculateLayout(
