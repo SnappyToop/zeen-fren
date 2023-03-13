@@ -52,20 +52,26 @@ getConfig(opts).then(async config => {
   // 2. figure out image dimensions in pixels
   // const dimensions = await getDimensions(config.images[0]);
   
-  // 3. process input images
+  // 3. generate crop commands to extract individual pages from input images
   const pages = await processInputImages(config, tempDir);
   console.log(pages);
 
-  // 4. create new "spreads"
-  const spreads = await createSpreadsFromPages(pages, tempDir)
-  console.log(spreads);
-
-  // 5. calculate most efficient layout
+  // 4. calculate most efficient layout
   const layout = await calculateLayout(config);
   console.log(layout);
 
+  const out = await calculatePositions(pages, layout);
+  // console.log(out.map(x => x.flat().join(' ')));
+
+  const page = await mergeLayers(out);
+  console.log(page)
+  // 4. create new "spreads"
+  // const spreads = await createSpreadsFromPages(pages, tempDir)
+  // console.log(spreads);
+
+  
   // 6. render spreads onto canvas
-  const bigPages = await renderSpreads(layout, spreads);
+  // const bigPages = await renderSpreads(layout, spreads);
   // console.log(bigPages);
 
 // 7. compile to pdf/tiff
@@ -97,46 +103,171 @@ async function processImage(
   imagePath: Filename,
   dimensions: Dimensions,
   pane: Pane,
-  outFile: Filename,
-): Promise<string> {
+): Promise<string[]> {
   const { height, width } = dimensions;
   const cropOffset = pane === 'left' ? 0 : width;
   const cropArgs = `${width}x${height}+${cropOffset}+0`;
-  const args = [ imagePath, '-crop', cropArgs, outFile ];
-  return magick({ args });
+  const args = [ imagePath, '-gravity', 'west', '-crop', cropArgs, '+repage' ];
+  return args;
 }
 
 async function processInputImages(
   config: Config,
-  // dimensions: Dimensions,
   tempDir: Filename
-) {
+): Promise<string[][]> {
   const { images } = config;
   const { width, height } = await getDimensions(images[0]);
-  const pages: Filename[] = [];
+  const pages: string[][] = [];
   for (let i = 0; i < images.length; i++) {
     const image = images[i];
     // NOTE: we skip the left pane on the first page (unless backIsFirst option is specified, 
     // in which case, it is processes as the final image)
     if (i !== 0) {
       const leftFileName = `${tempDir}/page-${i * 2 - 1}.png`;
-      await processImage(image, { height, width: width / 2 }, "left", leftFileName);
+      const cmd = await processImage(image, { height, width: width / 2 }, "left");
       // TODO: handle errors
-      pages.push(leftFileName);
-
+      // pages.push(leftFileName);
+      pages.push(cmd);
     }
 
     // NOTE: as with above, we skip right pane on the last page (again, unless backIsFirst
     // option is specified, in which case the last page will have already been handled above)
     if (i !== images.length - 1) {
       const rightFileName = `${tempDir}/page-${i * 2}.png`;
-      await processImage(image, { height, width: width / 2 }, "right", rightFileName);
+      const cmd = await processImage(image, { height, width: width / 2 }, "right");
       // TODO: handle errors
-      pages.push(rightFileName);
+      // pages.push(rightFileName);
+      pages.push(cmd);
     }
   }
   return pages;
 }
+
+
+async function calculatePositions(pages: string[][], layout: Layout) {
+  // while pages remain ... 
+  //   assemble pages for front
+  //     POP last page/command for front/left
+  //     PUSH onto current row (current, left)
+  //     SHIFT first page/command for front/right
+  //     PUSH onto current row (current, left, right)
+  //   assemble pages for back
+  //     POP last page/command for back/right
+  //     UNSHFIT onto current row (right, current)
+  //     SHIFT first page/command for back/left
+  //     UNSHFIT onto current row (left, right, current)
+  //   if row is full
+  //     +append (horiz) contents of into row
+  //     -append (vert) contents onto page
+  //   if page is full
+  //     create new page
+
+  // const pageGeometry = 
+  // let pages = [];
+
+  const imageWidth = 800;
+  const imageHeight = 800;
+
+  const numColumns = layout.gridLayout.x;
+  const numRows = layout.gridLayout.y;
+  console.log(numColumns, numRows);
+  
+  let row = 0, column = 0;
+
+  let front = [], back = [];
+  for (let i=0, j=pages.length-1; i < j; i+=2, j-=2) {
+    console.log({ i, j });
+    // POP last page/command for front/left
+    const frontLeft = pages[j];
+    const frontLeftOffset = {
+      x: column * 2 * imageWidth,
+      y: row * imageHeight,
+    };
+    console.log(frontLeft, frontLeftOffset);
+    front.push([
+      '(', ...frontLeft, ')',
+      '-background', 'none',
+      '-gravity', 'southeast',
+      '-extent', `${frontLeftOffset.x + imageWidth}x${frontLeftOffset.y+imageHeight}`,
+    ]);
+
+    const frontRight = pages[i];
+    const frontRightOffset = {
+      x: ((column * 2) + 1) * imageWidth,
+      y: row * imageHeight,
+    };
+    console.log(frontRight, frontRightOffset);
+    front.push([
+      '(', ...frontRight, ')',
+      '-background', 'none',
+      '-gravity', 'southeast',
+      '-extent', `${frontRightOffset.x + imageWidth}x${frontRightOffset.y+imageHeight}`,
+    ]);
+
+    const backRight = pages[j-1];
+    const backRightOffset = {
+      x: imageWidth * (2 * (numColumns - column - 1)),
+      y: row * imageHeight,
+    }
+    console.log(backRight, backRightOffset);
+    back.push([
+      '(', ...backRight, ')',
+      '-background', 'none',
+      '-gravity', 'southeast',
+      '-extent', `${backRightOffset.x + imageWidth}x${backRightOffset.y+imageHeight}`,
+    ])
+
+    const backLeft = pages[i+1];
+    const backLeftOffset = {
+      x: imageWidth * (2 * (numColumns - column - 1) - 1),
+      y: row * imageHeight,
+    }
+    console.log(backLeft, backLeftOffset);
+    back.push([
+      '(', ...backLeft, ')',
+      '-background', 'none',
+      '-gravity', 'southeast',
+      '-extent', `${backLeftOffset.x + imageWidth}x${backLeftOffset.y+imageHeight}`,
+    ])
+
+    console.log(column, row);
+    column ++;
+    if (column === numColumns) {
+      column = 0;
+      row++;
+    }
+  }
+
+  // TODO: allow for multiple pages!
+  return [front, back];
+}
+
+
+async function mergeLayers(pages: string[][]) {
+  for (let i=0; i<pages.length; i++) {
+    // console.log(pages[i]);
+    const args = [
+      ...(pages[i].map(page => ['(', ...page, ')'])).flat(),
+      '-gravity', 'northwest',
+      '-layers', 'mosaic',
+
+      // '(', ...pages[i][0], ')',
+      // '-gravity', 'northeast',
+      // '(', ...pages[i][1], ')',
+      // '-gravity', 'northeast',
+      // '-composite',
+      `${tempDir}/page-${i}.png`,
+    ];
+
+    console.log(args);
+    console.log(await magick({ args }));
+  }
+
+
+  
+}
+
+
 
 async function createSpread(
   left: Filename,
@@ -144,12 +275,12 @@ async function createSpread(
   outFile: Filename
 ) {
   const args = [
-    'montage',
-    '-mode', 'concatenate',
-    '-tile', 'x1',
-    left, right,
+    left,
+    right,
+    '+append',
     outFile
-  ];
+  ].flat();
+  console.log(args, args.join(' '));
   return magick({ args });
 }
 
@@ -215,6 +346,10 @@ function calculateLayout(config: Config) {
       height: verticalSpace,
       width: horizontalSpace,
       // unit: 
+    },
+    imageSize: { 
+      height: 800,
+      width: 800,
     },
     gridLayout: portraitLayout,
     padding: 0, // TODO: figure out padding
