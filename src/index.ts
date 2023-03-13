@@ -101,9 +101,9 @@ async function processImage(
   pane: Pane,
 ): Promise<string[]> {
   const { height, width } = dimensions;
-  const cropOffset = pane === 'left' ? 0 : width;
-  const cropArgs = `${width}x${height}+${cropOffset}+0`;
-  const args = [ imagePath, '-gravity', 'west', '-crop', cropArgs, '+repage' ];
+  const offset = pane === 'left' ? 0 : width;
+  const region = `${width}x${height}+${offset}+0`;
+  const args = [ imagePath, '-extract', region, '+repage' ];
   return args;
 }
 
@@ -176,7 +176,8 @@ async function calculatePositions(pages: string[][], layout: Layout) {
   // const imageWidth = 800;
   // const imageHeight = 800;
   
-  const imageDimeniosn = { width: 2550, height: 3300 };
+  // const imageDimeniosn = { width: 2550, height: 3300 };
+  const imageDimeniosn = { width: 800, height: 800 };
 
   const numColumns = layout.gridLayout.x;
   const numRows = layout.gridLayout.y;
