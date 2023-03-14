@@ -16,22 +16,31 @@ type Pane = 'right' | 'left';
 
 type Config = {
   images: Filename[],
-  realDimensions: Dimensions,
+  columns: number,
+  // realDimensions: Dimensions,
   paperSize: {
-    dimensions: Dimensions,
-    margin?: number
+    width?: number,
+    height?: number,
+    margin?: number,
+    marginX?: number,
+    marginY?: number,
+    marginLeft?: number,
+    marginRight?: number,
+    marginTop?: number,
+    marginBotton?: number,
+    unit?: string,
   },
   format?: 'spread' | 'page',
-  backIsFirst?: boolean,
 };
 
 type Layout = {
-  paperSize: Dimensions,
+  // paperSize: Dimensions,
   gridLayout: {
     x: number,
     y: number,
   },
-  padding: number,
+  marginPixels: any,
+  // padding: number,
 };
 
 type Command = string[];
@@ -54,26 +63,25 @@ getConfig(opts).then(async config => {
   console.log(config);
 
   // 2. figure out image dimensions in pixels
-  // const dimensions = await getDimensions(config.images[0]);
+  const dimensions = await getDimensions(config.images[0]);
   
   // 3. generate crop commands to extract individual pages from input images
-  const pages = await processInputImages(config, tempDir);
+  const pages = await processInputImages(config, dimensions);
   console.log(pages);
   // NOTE: this output can also be used to generate thumbnails
 
   // 4. calculate most efficient layout
-  const layout = await calculateLayout(config);
+  const layout = await calculateLayout(config, dimensions);
   console.log(layout);
 
   // 5. determine final position on the page for each cropped page and express
   //    as an imagemagick command
-  const out = await calculatePositions(pages, layout);
-  // console.log(out.map(x => x.flat().join(' ')));
+  const gridPositions = calculatePositions(pages, layout);
+  console.log(gridPositions);
 
   // 6. execute the commands and render into pages
-  // const page = await mergeLayers(out);
-  const page = await smushPages(out);
-  console.log(page)
+  const finalPages = await combinePages(gridPositions, layout);
+  console.log(finalPages)
 
 
 });
@@ -98,11 +106,11 @@ async function getDimensions(image: Filename): Promise<Dimensions> {
   return { height, width };
 }
 
-async function processImage(
+function processImage(
   imagePath: Filename,
   dimensions: Dimensions,
   pane: Pane,
-): Promise<string[]> {
+): string[] {
   const { height, width } = dimensions;
   const offset = pane === 'left' ? 0 : width;
   const region = `${width}x${height}+${offset}+0`;
@@ -110,39 +118,74 @@ async function processImage(
   return args;
 }
 
-async function processInputImages(
+function processInputImages(
   config: Config,
-  tempDir: Filename
-): Promise<string[][]> {
+  dimensions: Dimensions,
+): Command[] {
   const { images } = config;
-  const { width, height } = await getDimensions(images[0]);
+  const { width, height } = dimensions; 
   const pages: string[][] = [];
   for (let i = 0; i < images.length; i++) {
     const image = images[i];
     // NOTE: we skip the left pane on the first page (unless backIsFirst option is specified, 
     // in which case, it is processes as the final image)
     if (i !== 0) {
-      const leftFileName = `${tempDir}/page-${i * 2 - 1}.png`;
-      const cmd = await processImage(image, { height, width: width / 2 }, "left");
-      // TODO: handle errors
-      // pages.push(leftFileName);
-      pages.push(cmd);
+      pages.push(processImage(image, { height, width: width / 2 }, "left"));
     }
 
     // NOTE: as with above, we skip right pane on the last page (again, unless backIsFirst
     // option is specified, in which case the last page will have already been handled above)
     if (i !== images.length - 1) {
-      const rightFileName = `${tempDir}/page-${i * 2}.png`;
-      const cmd = await processImage(image, { height, width: width / 2 }, "right");
-      // TODO: handle errors
-      // pages.push(rightFileName);
-      pages.push(cmd);
+      pages.push(processImage(image, { height, width: width / 2 }, "right"));
     }
   }
   return pages;
 }
 
-async function calculatePositions(pages: string[][], layout: Layout) {
+function calculateLayout(config: Config, imageDimensions: Dimensions) {
+  const { columns, paperSize } = config;
+
+  console.log(paperSize);
+  const marginLeft = paperSize.marginLeft || paperSize.marginX || paperSize.margin || 0;
+  const marginRight = paperSize.marginRight || paperSize.marginX || paperSize.margin || 0;
+  const marginTop = paperSize.marginTop || paperSize.marginY || paperSize.margin || 0;
+  const marginBotton = paperSize.marginBotton || paperSize.marginY || paperSize.margin || 0;
+  
+  const paperWidth = paperSize.width || 8.5;
+  const paperHeight = paperSize.height || 11;
+
+  // const spreadWidth = 2 * (config.realDimensions.width);
+  // const spreadHeight = config.realDimensions.height;
+
+  const availableWidth = paperWidth - marginLeft - marginRight;
+  const availableHeight = paperHeight - marginTop - marginBotton;
+
+  console.log(availableWidth, availableHeight);
+  console.log(imageDimensions);
+
+  const pixelsPerInch = ( columns * imageDimensions.width ) / availableWidth;
+  console.log(pixelsPerInch)
+  const rows = Math.floor((availableHeight * pixelsPerInch)/ imageDimensions.height);
+
+  console.log({ columns, rows });
+  
+  return {
+    gridLayout: {
+      x: columns,
+      y: rows,
+    },
+    marginPixels: {
+      marginLeft: marginLeft * pixelsPerInch,
+      marginRight: marginRight * pixelsPerInch,
+      marginTop: marginTop * pixelsPerInch,
+      marginBotton: marginBotton * pixelsPerInch,
+    }
+
+  };
+
+}
+
+function calculatePositions(pages: string[][], layout: Layout): Command[][][] {
   // while pages remain ... 
   //   assemble pages for front
   //     POP last page/command for front/left
@@ -163,42 +206,50 @@ async function calculatePositions(pages: string[][], layout: Layout) {
   const numColumns = layout.gridLayout.x;
   const numRows = layout.gridLayout.y;
   
-  
   let row = 0, column = 0;
   let front: Command[][] = [[]], back: Command[][] = [[]];
   const out: Command[][][] = [];
 
   for (let i=0, j=pages.length-1; i < j; i+=2, j-=2) {
+    if (column === numColumns) {
+      row++;
+      column = 0;
+      if (row < numRows) {
+        front[row] = [];
+        back[row] = [];
+      } else {
+        out.push(front, back);
+        front = [[]];
+        back = [[]];
+        row = 0;
+      }
+    }
+
     front[row][column*2] = pages[j]; // front left
     front[row][column*2+1] = pages[i]; // front right
     back[row][(2 * (numColumns - column) - 1)] = pages[j-1]; // back right 
     back[row][ 2 * (numColumns - column - 1)] = pages[i+1]; // back left 
 
-    column ++;
-    if (column === numColumns) {
-      column = 0;
-      row++;
-      if (row === numRows) {
-        out.push(front, back);
-        front = [[]];
-        back = [[]];
-      } else {
-        front[row] = [];
-        back[row] = [];
-      }
-    }
+    column++;
   }
 
-  // TODO: allow for multiple pages!
   out.push(front, back);
   return out;
 }
 
-async function smushPages(pages: Command[][]) {
-  for (let i=0; i<pages.length; i++) {
+async function combinePages(pages: Command[][][], layout: Layout): Promise<Filename[]> {
+  const {
+    marginLeft,
+    marginRight,
+    marginTop,
+    marginBotton,
+  } = layout.marginPixels;
+  
+  return Promise.all(pages.map(async (page, i) => {
+    const filename = `${tempDir}/page-${i}.png`;
     const args = [
       '-background', 'none',
-      ...(pages[i].flatMap(row => [
+      ...(page.flatMap(row => [
         '(',
         ...row.flatMap(cmd => ['(', ...cmd, ')']),
         '+append',
@@ -206,93 +257,15 @@ async function smushPages(pages: Command[][]) {
       ])),
       '-gravity', i % 2 === 0 ? 'west': 'east',
       '-append',
-      `${tempDir}/page-${i}.png`,
+      '-gravity', i % 2 === 0 ? 'northwest': 'northeast',
+      '-splice', `${marginRight}x${marginBotton}`,
+      '-gravity', i % 2 === 0 ? 'southeast': 'southwest',
+      '-splice', `${marginLeft}x${marginTop}`,
+      filename,
     ];
     console.log(args);
-    console.log(await magick({ args }));
-  }
-}
-
-function _calculateLayout(
-  horizontalSpace: number, 
-  verticalSpace: number,
-  spreadWidth: number,
-  spreadHeight: number
-) {
-  console.log({
-    horizontalSpace,
-    verticalSpace,
-    spreadWidth,
-    spreadHeight,
-  })
-  const x = Math.trunc(horizontalSpace / spreadWidth);
-  const y = Math.trunc(verticalSpace / spreadHeight);
-  return { x, y };
-}
-
-function calculateLayout(config: Config) {
-  const marginX = 2 * (config.paperSize?.margin || 0);
-  const marginY = 2 * (config.paperSize?.margin || 0);
-  
-  const horizontalSpace = (config.paperSize?.dimensions?.width || 8.5) - marginX;
-  const verticalSpace = (config.paperSize?.dimensions?.height || 11) - marginY;
-
-  const spreadWidth = 2 * (config.realDimensions.width);
-  const spreadHeight = config.realDimensions.height;
-
-  // portrait
-  const portraitLayout = _calculateLayout(
-    horizontalSpace,
-    verticalSpace,
-    spreadWidth,
-    spreadHeight
-  );
-
-  return { 
-    paperSize: {
-      height: verticalSpace,
-      width: horizontalSpace,
-      // unit: 
-    },
-    imageSize: { 
-      height: 800,
-      width: 800,
-    },
-    gridLayout: portraitLayout,
-    padding: 0, // TODO: figure out padding
-  };
-
-  // // landscape
-  // const landscapeLayout = _calculateLayout(
-  //   verticalSpace,
-  //   horizontalSpace,
-  //   spreadWidth,
-  //   spreadHeight
-  // );
-
-  // if (
-  //   portraitLayout.x * portraitLayout.y >= 
-  //   landscapeLayout.x * landscapeLayout.y
-  // ) {
-  //   return { 
-  //     paperSize: {
-  //       height: verticalSpace,
-  //       width: horizontalSpace,
-  //       // unit: 
-  //     },
-  //     gridLayout: portraitLayout,
-  //     padding: 10, // TODO: figure out padding
-  //   };
-  // } else {
-  //   return { 
-  //     paperSize: {
-  //       height: horizontalSpace,
-  //       width: verticalSpace,
-  //       // unit: 
-  //     },
-  //     gridLayout: landscapeLayout,
-  //     padding: 10, // TODO: figure out padding
-  //   };
-  // }
+    await magick({ args });
+    return filename;
+  }));
 }
 
