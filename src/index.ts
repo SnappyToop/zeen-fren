@@ -28,6 +28,9 @@ type Config = {
     marginRight?: number,
     marginTop?: number,
     marginBotton?: number,
+    offsetX?: number,
+    offsetY?: number,
+    gutter?: number,
     unit?: string,
   },
   format?: 'spread' | 'page',
@@ -39,8 +42,16 @@ type Layout = {
     x: number,
     y: number,
   },
-  marginPixels: any,
-  // padding: number,
+  marginPixels: {
+    marginLeft: number,
+    marginRight: number,
+    marginTop: number,
+    marginBotton: number,
+  }, offsetPixels: {
+    offsetX: number,
+    offsetY: number,
+  },
+  gutterPixels: number,
 };
 
 type Command = string[];
@@ -179,8 +190,12 @@ function calculateLayout(config: Config, imageDimensions: Dimensions) {
       marginRight: marginRight * pixelsPerInch,
       marginTop: marginTop * pixelsPerInch,
       marginBotton: marginBotton * pixelsPerInch,
-    }
-
+    },
+    offsetPixels: {
+      offsetX: (paperSize.offsetX || 0) * pixelsPerInch,
+      offsetY: (paperSize.offsetX || 0) * pixelsPerInch,
+    },
+    gutterPixels: (paperSize.gutter || 0) * pixelsPerInch,
   };
 
 }
@@ -244,8 +259,28 @@ async function combinePages(pages: Command[][][], layout: Layout): Promise<Filen
     marginTop,
     marginBotton,
   } = layout.marginPixels;
+  const { 
+    offsetX,
+    offsetY,
+  } = layout.offsetPixels;
+  const { gutterPixels } = layout;
   
+  // console.log(marginRight, offsetX);
+  // console.log('-splice', `${marginRight - offsetX}x${marginBotton - offsetY}`)
+  // console.log('-splice', `${marginLeft + offsetX}x${marginTop + offsetY}`,)
+
+
+  // return [];
+
   return Promise.all(pages.map(async (page, i) => {
+    const left = marginLeft + offsetX + (i % 2 === 0 ? 1 : -1) * gutterPixels;
+    const right = marginRight - offsetX - (i % 2 === 0 ? 1 : -1) * gutterPixels;
+    const top = marginTop + offsetY;
+    const bottom = marginBotton - offsetY;
+
+    console.log({ left, right, top, bottom});
+    // return;
+    
     const filename = `${tempDir}/page-${i}.png`;
     const args = [
       '-background', 'none',
@@ -257,10 +292,10 @@ async function combinePages(pages: Command[][][], layout: Layout): Promise<Filen
       ])),
       '-gravity', i % 2 === 0 ? 'west': 'east',
       '-append',
-      '-gravity', i % 2 === 0 ? 'northwest': 'northeast',
-      '-splice', `${marginRight}x${marginBotton}`,
-      '-gravity', i % 2 === 0 ? 'southeast': 'southwest',
-      '-splice', `${marginLeft}x${marginTop}`,
+      '-gravity', 'northwest',
+      '-splice', `${right}x${bottom}`,
+      '-gravity', 'southeast',
+      '-splice', `${left}x${top}`,
       filename,
     ];
     console.log(args);
