@@ -156,7 +156,6 @@ function processInputImages(
 function calculateLayout(config: Config, imageDimensions: Dimensions) {
   const { columns, paperSize } = config;
 
-  console.log(paperSize);
   const marginLeft = paperSize.marginLeft || paperSize.marginX || paperSize.margin || 0;
   const marginRight = paperSize.marginRight || paperSize.marginX || paperSize.margin || 0;
   const marginTop = paperSize.marginTop || paperSize.marginY || paperSize.margin || 0;
@@ -164,9 +163,6 @@ function calculateLayout(config: Config, imageDimensions: Dimensions) {
   
   const paperWidth = paperSize.width || 8.5;
   const paperHeight = paperSize.height || 11;
-
-  // const spreadWidth = 2 * (config.realDimensions.width);
-  // const spreadHeight = config.realDimensions.height;
 
   const availableWidth = paperWidth - marginLeft - marginRight;
   const availableHeight = paperHeight - marginTop - marginBotton;
@@ -239,7 +235,7 @@ function calculatePositions(pages: string[][], layout: Layout): Command[][][] {
         row = 0;
       }
     }
-
+    
     front[row][column*2] = pages[j]; // front left
     front[row][column*2+1] = pages[i]; // front right
     back[row][(2 * (numColumns - column) - 1)] = pages[j-1]; // back right 
@@ -277,9 +273,6 @@ async function combinePages(pages: Command[][][], layout: Layout): Promise<Filen
     const right = marginRight - offsetX - (i % 2 === 0 ? 1 : -1) * gutterPixels;
     const top = marginTop + offsetY;
     const bottom = marginBotton - offsetY;
-
-    console.log({ left, right, top, bottom});
-    // return;
     
     const filename = `${tempDir}/page-${i}.png`;
     const args = [
@@ -292,13 +285,17 @@ async function combinePages(pages: Command[][][], layout: Layout): Promise<Filen
       ])),
       '-gravity', i % 2 === 0 ? 'west': 'east',
       '-append',
-      '-gravity', 'northwest',
-      '-splice', `${right}x${bottom}`,
-      '-gravity', 'southeast',
-      '-splice', `${left}x${top}`,
+      ...((right !== 0 || bottom !== 0) ?
+        ['-gravity', 'northwest', '-splice', `${right}x${bottom}`] :
+        []
+      ),
+      ...((left !== 0 || top !== 0) ?
+        ['-gravity', 'southeast', '-splice', `${left}x${top}`] :
+        []
+      ),
       filename,
     ];
-    console.log(args);
+
     await magick({ args });
     return filename;
   }));
